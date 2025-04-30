@@ -1,0 +1,77 @@
+#!/bin/bash
+set -e  # Exit on error
+
+
+# Function to install necessary packages
+install_packages() {
+    sudo yum upgrade -y
+    sudo yum install -y wget tar unzip java-17-openjdk
+}
+
+# Function to download and extract Logstash
+download_dependencies() {
+    sudo yum -y install epel-release 
+    sudo rpm --import https://artifacts.elastic.co/GPG-KEY-elasticsearch
+}
+
+create_logstash_repo() {
+    sudo bash -c 'cat << EOF > /etc/yum.repos.d/logstash.repo
+[logstash-8.x]
+name=Elastic repository for 8.x packages
+baseurl=https://artifacts.elastic.co/packages/8.x/yum
+gpgcheck=1
+gpgkey=https://artifacts.elastic.co/GPG-KEY-elasticsearch
+enabled=1
+autorefresh=1
+type=rpm-md
+EOF'
+}
+
+
+download_logstash() {
+    sudo yum install -y logstash
+}
+
+config_logstash_yml() {
+    sudo bash -c 'cat << EOF > /etc/logstash/logstash.yml
+pipeline.workers: 4
+pipeline.batch.size: 1000
+pipeline.batch.delay: 30
+api.enabled: true
+api.http.host: 0.0.0.0
+api.http.port: 9600-9700
+queue.type: persisted
+queue.max_bytes: 1gb
+EOF'
+}
+
+
+add_java_memory() {
+    echo 'export LS_JAVA_OPTS="-Xmx4g -Xms4g"' >> ~/.bashrc
+    source ~/.bashrc
+}
+
+update_logstash_heap() {
+    local JVM_OPTIONS="/etc/logstash/jvm.options"
+
+    echo "Updating Logstash heap settings..."
+
+    # Update -Xms and -Xmx values to 4g
+    sudo sed -i 's/^-Xms[0-9]\+g/-Xms4g/' "$JVM_OPTIONS"
+    sudo sed -i 's/^-Xmx[0-9]\+g/-Xmx4g/' "$JVM_OPTIONS"
+
+    echo "Heap size updated to 4g in $JVM_OPTIONS"
+}
+
+
+
+install_packages
+download_dependencies
+create_logstash_repo
+download_logstash
+sudo mkdir -p /etc/logstash/certs
+sudo chmod 777 /etc/logstash/certs
+config_logstash_yml
+add_java_memory
+update_logstash_heap
+sudo setenforce 0

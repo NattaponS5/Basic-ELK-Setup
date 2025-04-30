@@ -1,0 +1,89 @@
+#!/bin/bash
+set -e  # Exit on error
+
+sudo openssl pkcs12 -in /etc/logstash/certs/http.p12 -clcerts -nokeys -out /etc/logstash/certs/http_ca.crt -passin "pass:"
+
+cd /etc/logstash/certs
+sudo chown $USER:$USER http_ca.crt
+sudo chmod 777 http_ca.crt
+
+
+# Function to read IP addresses and save to a file
+read_and_save_ip_addresses() {
+    echo "Please enter the public  IP addresses of all Elasticsearch nodes."
+    read -p "Enter public IP of elk-1: " public_ip_elk1
+    read -p "Enter public IP of elk-2: " public_ip_elk2
+    read -p "Enter public IP of elk-3: " public_ip_elk3
+}
+
+get_elastic_password() {
+    read -p "Enter your generated elastic Password: " elastic_password
+    echo
+}
+
+create_logstash_conf() {
+    cd
+    sudo tee /etc/logstash/conf.d/logstash.conf > /dev/null << EOF
+input {
+  elastic_agent {
+    port => 5044
+    host => "0.0.0.0"
+    ssl => true
+    ssl_certificate => "/etc/logstash/certs/logstash.crt"
+    ssl_key => "/etc/logstash/certs/logstash.key"
+    ssl_certificate_authorities => ["/etc/logstash/certs/ca.crt"]
+    ssl_verify_mode => "force_peer"  # Ensure client certificate validation
+    type => "elastic_agent_log"
+  }
+  beats {
+    port => 5045  # This should match the port specified in Filebeat's output configuration
+    host => "0.0.0.0"
+    type => "kafka_text_log"
+  }
+
+}
+
+filter {
+  if [type] == "elastic_agent_log" {
+
+    if [agent][name] == "filebeat" {
+      drop { }
+    }
+    if [service][address] == "http://unix/stats" or [service][address] == "http://unix/inputs" {
+      drop { }
+    }
+    if [metricset][name] == "json" {
+      drop { }
+    }
+  } 
+}
+
+output {
+  if [type] == "kafka_text_log" {
+    elasticsearch {
+      hosts => ["https://$public_ip_elk1:9200", "https://$public_ip_elk2:9200", "https://$public_ip_elk3:9200"]
+      user => "elastic"
+      password => "$elastic_password"  # Replace with actual password
+      ssl => true
+      index => "kafka-log-text"
+      cacert => "/etc/logstash/certs/http_ca.crt"
+    }
+  } else {
+    elasticsearch {
+      hosts => ["https://$public_ip_elk1:9200", "https://$public_ip_elk2:9200", "https://$public_ip_elk3:9200"]
+      user => "elastic"
+      password => "$elastic_password"  # Replace with actual password
+      ssl => true
+      index => "elastic-agent-pipeline"
+      cacert => "/etc/logstash/certs/http_ca.crt"
+    }
+  }
+}
+EOF
+}
+
+sudo systemctl enable logstash
+read_and_save_ip_addresses
+get_elastic_password
+create_logstash_conf
+sudo chmod 777 /usr/share/logstash/data

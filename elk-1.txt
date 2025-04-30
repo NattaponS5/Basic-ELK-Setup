@@ -1,0 +1,404 @@
+#!/bin/bash
+set -e  # Exit on error
+
+# Function to get current username and home directory
+get_user_info() {
+    current_user=$(whoami)
+    current_user_home=$(echo ~)
+}
+
+# Function to read IP addresses and save to a file
+read_and_save_ip_addresses() {
+    echo "Please enter the public and private IP addresses of all VMs."
+    read -p "Enter public IP of elk-1: " public_ip_elk1
+    read -p "Enter private IP of elk-1: " private_ip_elk1
+    read -p "Enter public IP of elk-2: " public_ip_elk2
+    read -p "Enter private IP of elk-2: " private_ip_elk2
+    read -p "Enter public IP of elk-3: " public_ip_elk3
+    read -p "Enter private IP of elk-3: " private_ip_elk3
+    read -p "Enter public IP of elk-ml: " public_ip_elkml
+    read -p "Enter private IP of elk-ml: " private_ip_elkml
+    read -p "Enter public IP of kibana: " public_ip_kibana
+    read -p "Enter private IP of kibana: " private_ip_kibana
+    read -p "Enter public IP of logstash: " public_ip_logstash
+    read -p "Enter private IP of logstash: " private_ip_logstash
+
+    # Save to file
+    echo "public_ip_elk1=$public_ip_elk1" > "$ip_file"
+    echo "private_ip_elk1=$private_ip_elk1" >> "$ip_file"
+    echo "public_ip_elk2=$public_ip_elk2" >> "$ip_file"
+    echo "private_ip_elk2=$private_ip_elk2" >> "$ip_file"
+    echo "public_ip_elk3=$public_ip_elk3" >> "$ip_file"
+    echo "private_ip_elk3=$private_ip_elk3" >> "$ip_file"
+    echo "public_ip_elkml=$public_ip_elkml" >> "$ip_file"
+    echo "private_ip_elkml=$private_ip_elkml" >> "$ip_file"
+    echo "public_ip_kibana=$public_ip_kibana" >> "$ip_file"
+    echo "private_ip_kibana=$private_ip_kibana" >> "$ip_file"
+    echo "public_ip_logstash=$public_ip_logstash" >> "$ip_file"
+    echo "private_ip_logstash=$private_ip_logstash" >> "$ip_file"
+}
+
+# Function to read IP addresses from a file
+read_ip_addresses_from_file() {
+    if [ -f "$ip_file" ]; then
+        source "$ip_file"
+    else
+        echo "IP addresses file not found. Please run the script again to input IP addresses."
+        exit 1
+    fi
+}
+
+# Function to read SSH key
+read_ssh_key() {
+    read -p "Enter the path to your SSH key (e.g., ~/.ssh/id_rsa): " ssh_key_path
+    if [ ! -f "$ssh_key_path" ]; then
+        echo "SSH key file not found: $ssh_key_path"
+        exit 1
+    fi
+}
+
+# Function to read VM username
+read_username() {
+    read -p "Enter the username of Another Node (e.g., natt_): " VMusername
+}
+
+# Function to install necessary packages
+install_packages() {
+    sudo yum upgrade -y
+    sudo yum install -y wget tar unzip java-17-openjdk
+}
+
+# Function to download and extract Elasticsearch
+download_and_extract_elasticsearch() {
+    wget https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-8.17.2-linux-x86_64.tar.gz
+    tar -xzf elasticsearch-8.17.2-linux-x86_64.tar.gz
+}
+
+# Function to generate CA
+generate_ca() {
+    # Navigate to Elasticsearch bin directory
+    cd elasticsearch-8.17.2/bin
+
+    # Set CA password
+    ca_password=""
+
+    # Generate CA with password
+    echo "Generating CA..."
+    (
+        echo "$ca_password"
+    ) | sudo ./elasticsearch-certutil ca -out elastic-stack-ca.p12
+
+    # Set permissions
+    sudo chmod -R 777 ../elastic-stack-ca.p12
+
+    echo "CA generated successfully."
+}
+
+# Function to generate node certificates
+generate_node_certificates() {
+    # Generate node certificates
+    echo "Generating node certificates..."
+    ca_password=""  # Replace with your CA password
+    (
+        echo "$ca_password"
+        echo "$ca_password"
+    ) | sudo ./elasticsearch-certutil cert --ca elastic-stack-ca.p12 -out elastic-certificates.p12
+
+    # Set permissions
+    sudo chmod -R 777 ../elastic-certificates.p12
+
+    echo "Node certificates generated successfully."
+}
+
+# Function to generate HTTP certificate
+generate_http_certificate() {
+    # Generate HTTP certificate with automated input
+    echo "Generating HTTP certificate..."
+    ca_password=""  # Replace with your CA password
+    (
+        echo "n"  # Generate CSR: n
+        echo "y"  # Use existed CA: y
+        echo "/home/$USER/elasticsearch-8.17.2/elastic-stack-ca.p12"
+        echo "$ca_password"  # CA password
+        echo "" # how long certificate
+        echo "n"  # do not create certificate per node
+        echo "*.internal"  # Hostnames
+        echo ""  # End hostnames
+        echo "y"
+        echo "$public_ip_elk1"  # Public IP of elk-1
+        echo "$private_ip_elk1"  # Private IP of elk-1
+        echo "$public_ip_elk2"  # Public IP of elk-2
+        echo "$private_ip_elk2"  # Private IP of elk-2
+        echo "$public_ip_elk3"  # Public IP of elk-3
+        echo "$private_ip_elk3"  # Private IP of elk-3
+        echo "$public_ip_elkml"  # Public IP of elk-ml
+        echo "$private_ip_elkml"  # Private IP of elk-ml
+        echo "$public_ip_kibana"  # Public IP of kibana
+        echo "$private_ip_kibana"  # Private IP of kibana
+        echo "$public_ip_logstash"  # Public IP of logstash
+        echo "$private_ip_logstash"  # Private IP of logstash
+        echo ""  # End IP addresses
+        echo "y"
+        echo "n"  # Do you wish to change any of these options? [y/N]n
+        echo "" # password for http.p12
+        echo "" # filename - /home/natt_/elasticsearch-8.17.2/elasticsearch-ssl-http.zip
+    ) | sudo ./elasticsearch-certutil http
+
+    # Set permissions
+    sudo chmod -R 777 ../elasticsearch-ssl-http.zip
+
+    echo "HTTP certificate generated successfully."
+}
+
+# Function to configure certificates
+configure_certificates() {
+    # Navigate to Elasticsearch bin directory
+    cd
+    cd elasticsearch-8.17.2
+
+    # Unzip HTTP certificate
+    sudo unzip elasticsearch-ssl-http.zip
+
+    # Set permissions
+    sudo chmod -R 777 elasticsearch
+    sudo chmod -R 777 kibana
+    sudo mkdir -p config/certs
+    sudo cp elasticsearch/http.p12 config/certs
+    sudo cp elastic-certificates.p12 config/certs
+    sudo chown "$current_user":"$current_user" config/certs/*.p12
+    sudo chmod 755 config/certs/elastic-certificates.p12
+    sudo chmod 755 config/certs/http.p12
+
+    # Create the certs directory and set permissions
+    sudo mkdir -p /var/lib/elasticsearch
+    sudo chmod 777 /var/lib/elasticsearch
+    sudo mkdir -p /var/log/elasticsearch
+    sudo chmod 777 /var/log/elasticsearch
+
+    # Verify certificate configuration
+    if [ ! -f config/certs/http.p12 ] || [ ! -f config/certs/elastic-certificates.p12 ]; then
+        echo "Certificate configuration failed. Please check the logs and try again."
+        exit 1
+    else
+        echo "Certificates configured successfully."
+    fi
+}
+
+# Function to create a predefined elasticsearch.yml file
+create_elasticsearch_yml() {
+    cat << EOF > /home/$USER/elasticsearch-8.17.2/config/elasticsearch.yml
+cluster.name: my-elasticsearch-cluster
+node.name: $HOSTNAME
+node.roles: [master, data, ingest]
+path.data: /var/lib/elasticsearch
+path.logs: /var/log/elasticsearch
+network.host: 0.0.0.0
+http.port: 9200
+discovery.seed_hosts: ["${private_ips[0]}", "${private_ips[1]}", "${private_ips[2]}"]
+cluster.initial_master_nodes: ["elk-1", "elk-2", "elk-3"]
+
+xpack.security.enabled: true
+xpack.security.transport.ssl.enabled: true
+xpack.security.transport.ssl.verification_mode: certificate
+xpack.security.transport.ssl.client_authentication: required
+xpack.security.transport.ssl.keystore.path: certs/elastic-certificates.p12
+xpack.security.transport.ssl.truststore.path: certs/elastic-certificates.p12
+
+xpack.security.http.ssl.enabled: true
+xpack.security.http.ssl.keystore.path: certs/http.p12
+EOF
+
+    echo "elasticsearch.yml created successfully."
+}
+
+scp_certificates_elastic() {
+    # Define the target VMs and their IP addresses
+    target_vms=(
+        "$VMusername@$private_ip_elk2"
+        "$VMusername@$private_ip_elk3"
+        "$VMusername@$private_ip_elkml"
+    )
+
+    # Source path for certificates
+    source_path="/home/$USER/elasticsearch-8.17.2/config/certs"
+
+    # Iterate over each target VM and copy certificates
+    for vm in "${target_vms[@]}"; do
+        # Extract username and IP address
+        username=$(echo "$vm" | cut -d'@' -f1)
+        ip_address=$(echo "$vm" | cut -d'@' -f2)
+
+        # Define destination path
+        destination_path="$username@$ip_address:/home/$VMusername/elasticsearch-8.17.2/config"
+
+        # Ensure the destination directory exists and has the correct permissions
+        echo "Ensuring destination directory exists and has correct permissions..."
+        ssh -i "$ssh_key_path" "$vm" "mkdir -p /home/$VMusername/elasticsearch-8.17.2/config/certs"
+        ssh -i "$ssh_key_path" "$vm" "sudo chown -R $VMusername:$VMusername /home/$VMusername/elasticsearch-8.17.2/config/certs"
+        ssh -i "$ssh_key_path" "$vm" "chmod -R 777 /home/$VMusername/elasticsearch-8.17.2/config/certs"
+
+        # Securely copy certificates
+        echo "Copying certificates to $destination_path..."
+        scp -i "$ssh_key_path" -r "$source_path" "$destination_path"
+        if [ $? -eq 0 ]; then
+            echo "Certificates copied successfully to $destination_path."
+        else
+            echo "Failed to copy certificates to $destination_path."
+            exit 1
+        fi
+    done
+}
+
+scp_certificates_kibana_pem() {
+    # Define the target VMs and their IP addresses
+    target_vms=(
+        "$VMusername@$private_ip_kibana"
+    )
+
+    # Source path for certificates
+    source_path="/home/$USER/elasticsearch-8.17.2/kibana/elasticsearch-ca.pem"
+
+    # Iterate over each target VM and copy certificates
+    for vm in "${target_vms[@]}"; do
+        # Extract username and IP address
+        username=$(echo "$vm" | cut -d'@' -f1)
+        ip_address=$(echo "$vm" | cut -d'@' -f2)
+
+        # Define destination path
+        destination_path="$username@$ip_address:/home/$VMusername/kibana-8.17.2/config/certs"
+
+        # Ensure the destination directory exists and has the correct permissions
+        echo "Ensuring destination directory exists and has correct permissions..."
+        ssh -i "$ssh_key_path" "$vm" "mkdir -p /home/$VMusername/kibana-8.17.2/config/certs"
+        ssh -i "$ssh_key_path" "$vm" "sudo chown -R $VMusername:$VMusername /home/$VMusername/kibana-8.17.2/config/certs"
+        ssh -i "$ssh_key_path" "$vm" "chmod -R 777 /home/$VMusername/kibana-8.17.2/config/certs"
+
+        # Securely copy certificates
+        echo "Copying certificates to $destination_path..."
+        scp -i "$ssh_key_path" -r "$source_path" "$destination_path"
+        if [ $? -eq 0 ]; then
+            echo "Certificates copied successfully to $destination_path."
+        else
+            echo "Failed to copy certificates to $destination_path."
+            exit 1
+        fi
+    done
+}
+
+scp_certificates_kibana_cert() {
+    # Define the target VMs and their IP addresses
+    target_vms=(
+        "$VMusername@$private_ip_kibana"
+    )
+
+    # Source path for certificates
+    source_path="/home/$USER/elasticsearch-8.17.2/config/certs"
+
+    # Iterate over each target VM and copy certificates
+    for vm in "${target_vms[@]}"; do
+        # Extract username and IP address
+        username=$(echo "$vm" | cut -d'@' -f1)
+        ip_address=$(echo "$vm" | cut -d'@' -f2)
+
+        # Define destination path
+        destination_path="$username@$ip_address:/home/$VMusername/kibana-8.17.2/config"
+
+        # Ensure the destination directory exists and has the correct permissions
+        echo "Ensuring destination directory exists and has correct permissions..."
+        ssh -i "$ssh_key_path" "$vm" "mkdir -p /home/$VMusername/kibana-8.17.2/config/certs"
+        ssh -i "$ssh_key_path" "$vm" "sudo chown -R $VMusername:$VMusername /home/$VMusername/kibana-8.17.2/config/certs"
+        ssh -i "$ssh_key_path" "$vm" "chmod -R 777 /home/$VMusername/kibana-8.17.2/config/certs"
+
+        # Securely copy certificates
+        echo "Copying certificates to $destination_path..."
+        scp -i "$ssh_key_path" -r "$source_path" "$destination_path"
+        if [ $? -eq 0 ]; then
+            echo "Certificates copied successfully to $destination_path."
+        else
+            echo "Failed to copy certificates to $destination_path."
+            exit 1
+        fi
+    done
+}
+
+scp_certificates_logstash() {
+    # Define the target VMs and their IP addresses
+    target_vms=(
+        "$VMusername@$private_ip_logstash"
+    )
+
+    # Source path for certificates
+    source_path="/home/$USER/elasticsearch-8.17.2/config/certs/"
+
+    # Iterate over each target VM and copy certificates
+    for vm in "${target_vms[@]}"; do
+        # Extract username and IP address
+        username=$(echo "$vm" | cut -d'@' -f1)
+        ip_address=$(echo "$vm" | cut -d'@' -f2)
+
+        # Define destination path
+        destination_path="$username@$ip_address:/etc/logstash"
+
+        # Ensure the destination directory exists and has the correct permissions
+        echo "Ensuring destination directory exists and has correct permissions..."
+
+        # Securely copy certificates
+        echo "Copying certificates to $destination_path..."
+        scp -i "$ssh_key_path" -r "$source_path" "$destination_path"
+        if [ $? -eq 0 ]; then
+            echo "Certificates copied successfully to $destination_path."
+        else
+            echo "Failed to copy certificates to $destination_path."
+            exit 1
+        fi
+    done
+}
+
+vm_max_memory() {
+    sudo sh -c "echo 'vm.max_map_count=262144' >> /etc/sysctl.conf"
+    sudo sysctl -p
+}
+
+
+# Main script execution
+get_user_info
+
+# Check if IP addresses file exists; if not, prompt the user to input them
+ip_file="$current_user_home/ip_addresses.txt"
+if [ -f "$ip_file" ]; then
+    read_ip_addresses_from_file
+    read -p "Do you want to use the existing IP addresses? (y/n): " use_existing
+    if [ "$use_existing" != "y" ]; then
+        read_and_save_ip_addresses
+    fi
+else
+    read_and_save_ip_addresses
+fi
+
+# Main script execution
+read_ip_addresses_from_file
+read_ssh_key
+read_username
+install_packages
+download_and_extract_elasticsearch
+
+# Step-by-step certificate generation and configuration
+generate_ca
+generate_node_certificates
+generate_http_certificate
+configure_certificates
+create_elasticsearch_yml
+
+# copy certificate to another VM
+scp_certificates_elastic
+scp_certificates_kibana_pem
+scp_certificates_kibana_cert
+scp_certificates_logstash
+
+
+# Adjust Memory
+vm_max_memory
+
+
+
+echo "ELK Stack installation and configuration completed successfully."

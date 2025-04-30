@@ -1,0 +1,24 @@
+#!/bin/bash
+set -e  # Exit on error
+
+
+# Function to install necessary packages
+install_packages() {
+    sudo yum upgrade -y
+    sudo yum install -y wget tar unzip java-17-openjdk
+}
+
+# Function to download and extract Kibana
+download_and_extract_kibana() {
+    curl -O https://artifacts.elastic.co/downloads/kibana/kibana-8.17.2-linux-x86_64.tar.gz
+    tar -xzf kibana-8.17.2-linux-x86_64.tar.gz
+}
+
+# Function to download HAProxy
+download_and_extract_haproxy() {
+    sudo yum install -y haproxy
+}
+
+install_packages
+download_and_extract_kibana
+download_and_extract_haproxy

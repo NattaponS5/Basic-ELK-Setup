@@ -1,0 +1,114 @@
+#!/bin/bash
+#at ELK1
+set -e  # Exit on error
+
+get_ip() {
+    read -p "Enter private IP of Kibana: " private_ip_kibana
+    read -p "Enter private IP of Logstash: " private_ip_logstash
+    read -p "Enter public IP of Logstash: " public_ip_logstash
+}
+
+# Function to read VM username
+read_username() {
+    read -p "Enter the username of Another Node (e.g., natt_): " VMusername
+}
+
+# Function to read SSH key
+read_ssh_key() {
+    read -p "Enter the path to your SSH key (e.g., ~/.ssh/id_rsa): " ssh_key_path
+    if [ ! -f "$ssh_key_path" ]; then
+        echo "SSH key file not found: $ssh_key_path"
+        exit 1
+    fi
+}
+
+# Create Certificate with Public IP
+create_cert() {
+    cd elasticsearch-8.17.2/bin
+    (
+        echo ""  
+        echo "" 
+        echo ""  
+        echo "" 
+        echo ""  
+        echo ""  
+        echo "" 
+        echo ""  
+        echo ""
+    ) | sudo ./elasticsearch-certutil cert --name logstash-server --ip "$public_ip_logstash" --ca elastic-stack-ca.p12 --out logstash.p12
+}
+
+create_pkcs() {
+    cd 
+    cd elasticsearch-8.17.2
+    sudo openssl pkcs12 -in logstash.p12 -clcerts -nokeys -out logstash.crt
+    sudo openssl pkcs12 -in logstash.p12 -nocerts -nodes -out logstash.key
+    sudo openssl pkcs12 -in elastic-stack-ca.p12 -clcerts -nokeys -out ca.crt  
+}
+
+give_permission() {
+    cd
+    if [ -f "elasticsearch-8.17.2/ca.crt" ]; then
+        sudo chmod 777 elasticsearch-8.17.2/ca.crt
+    else
+        echo "Warning: ca.crt not found. Certificate may not have been generated correctly."
+        exit 1
+    fi
+
+    sudo chmod 777 elasticsearch-8.17.2/logstash.crt
+    sudo chmod 777 elasticsearch-8.17.2/logstash.key
+}
+
+scp_certificates() {
+    # Define source paths for certificates
+    ca_crt_path="/home/$USER/elasticsearch-8.17.2/ca.crt"
+    logstash_crt_path="/home/$USER/elasticsearch-8.17.2/logstash.crt"
+    logstash_key_path="/home/$USER/elasticsearch-8.17.2/logstash.key"
+    
+    # Define destination paths
+    logstash_cert_dir="/etc/logstash/certs"
+    kibana_cert_dir="/home/$VMusername/kibana-8.17.2/config/certs"
+    
+    echo "Ensuring destination directories exist..."
+    ssh -i "$ssh_key_path" "$VMusername@$private_ip_kibana" "sudo mkdir -p $logstash_cert_dir $kibana_cert_dir"
+    ssh -i "$ssh_key_path" "$VMusername@$private_ip_kibana" "sudo chmod -R 777 $logstash_cert_dir $kibana_cert_dir"
+    
+    echo "Copying certificates to Kibana VM..."
+    
+    # Case 1: ca.crt to logstash certs
+    echo "Copying ca.crt to logstash certs directory..."
+    scp -i "$ssh_key_path" "$ca_crt_path" "$VMusername@$private_ip_logstash:$logstash_cert_dir/"
+    
+    # Case 2: logstash.crt to logstash certs
+    echo "Copying logstash.crt to logstash certs directory..."
+    scp -i "$ssh_key_path" "$logstash_crt_path" "$VMusername@$private_ip_logstash:$logstash_cert_dir/"
+    
+    # Case 3: logstash.key to logstash certs
+    echo "Copying logstash.key to logstash certs directory..."
+    scp -i "$ssh_key_path" "$logstash_key_path" "$VMusername@$private_ip_logstash:$logstash_cert_dir/"
+    
+    # Case 4: ca.crt to kibana certs
+    echo "Copying ca.crt to kibana certs directory..."
+    scp -i "$ssh_key_path" "$ca_crt_path" "$VMusername@$private_ip_kibana:$kibana_cert_dir/"
+    
+    # Case 5: logstash.crt to kibana certs
+    echo "Copying logstash.crt to kibana certs directory..."
+    scp -i "$ssh_key_path" "$logstash_crt_path" "$VMusername@$private_ip_kibana:$kibana_cert_dir/"
+    
+    # Case 6: logstash.key to kibana certs
+    echo "Copying logstash.key to kibana certs directory..."
+    scp -i "$ssh_key_path" "$logstash_key_path" "$VMusername@$private_ip_kibana:$kibana_cert_dir/"
+
+   
+    
+    echo "Certificate transfer completed."
+}
+
+
+get_ip
+read_username
+read_ssh_key
+create_cert
+create_pkcs
+give_permission
+scp_certificates

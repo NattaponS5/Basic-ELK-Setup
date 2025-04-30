@@ -1,0 +1,128 @@
+#!/bin/bash
+set -e  # Exit on error
+
+# Function to read SSH key
+get_kibana_system_password() {
+    read -p "Enter your generated kibana_system Password: " kibana_system_password
+}
+
+# Function to read the elastic password
+get_elastic_password() {
+    read -p "Enter your generated elastic Password: " elastic_password
+    echo
+}
+
+get_kibana_url() {
+    read -p "Enter Kibana Public URL: " kibana_url
+}
+
+# Function to base64 encode "elastic:password"
+encode_base64() {
+    encoded=$(echo -n "elastic:$elastic_password" | base64)
+}
+
+# Function to read private IPs for Elasticsearch configuration
+read_private_ips() {
+    echo "Enter the private IPs of the Elasticsearch nodes (comma-separated, e.g., 192.168.1.1,192.168.1.2,192.168.1.3):"
+    read private_ips_input
+    IFS=',' read -r -a private_ips <<< "$private_ips_input"
+    
+    # Validate that at least 3 IPs are provided
+    if [ "${#private_ips[@]}" -lt 3 ]; then
+        echo "Error: At least 3 private IPs are required."
+        exit 1
+    fi
+}
+
+
+# Function to create a predefined kibana.yml file
+create_kibana_yml() {
+    local seed_hosts=""  
+
+    for ((i=0; i<${#private_ips[@]}; i++)); do
+        ip=${private_ips[i]}
+        name=${node_names[i]}
+    
+        # Add comma only between elements, not after the last one
+        if [ $i -gt 0 ]; then
+            seed_hosts+=","
+        fi
+    
+        seed_hosts+="\"https://$ip:9200\""
+        initial_master_nodes+="\"$name\", "
+    done
+
+
+    cat << EOF > kibana-8.17.2/config/kibana.yml
+server.port: 5601
+server.host: "0.0.0.0"
+server.publicBaseUrl: "http://$kibana_url:5601"
+server.name: kibana-server
+elasticsearch.hosts: [$seed_hosts]
+elasticsearch.username: "kibana_system"
+elasticsearch.password: "$kibana_system_password"
+elasticsearch.sniffInterval: 60000
+elasticsearch.requestTimeout: 30000
+elasticsearch.ssl.certificateAuthorities: ["/home/$USER/kibana-8.17.2/config/certs/elasticsearch-ca.pem"]
+
+EOF
+}
+
+# Function to create pem key
+http_p12_to_elasticsearch_pem() {
+    sudo openssl pkcs12 -in /home/$USER/kibana-8.17.2/config/certs/http.p12 -out /etc/haproxy/elasticsearch.pem -nodes
+    sudo chmod 600 /etc/haproxy/elasticsearch.pem
+    sudo chown haproxy:haproxy /etc/haproxy/elasticsearch.pem
+}
+
+
+# Function to create haproxy.cfg
+create_haproxy_cfg() {
+    cd
+    sudo tee /etc/haproxy/haproxy.cfg > /dev/null << EOF
+#------------Elasticsearch--------------
+frontend elasticsearch_frontend
+    bind *:9200 ssl crt /etc/haproxy/elasticsearch.pem
+    default_backend elasticsearch_servers
+
+backend elasticsearch_servers
+    balance roundrobin
+    option httpchk GET /_cluster/health
+    http-check send meth GET uri /_cluster/health ver HTTP/1.1 hdr Authorization "Basic $encoded"
+    http-check expect status 200
+    server es1 ${private_ips[0]}:9200 check ssl verify none
+    server es2 ${private_ips[1]}:9200 check ssl verify none
+    server es3 ${private_ips[2]}:9200 check backup ssl verify none #use public IP
+
+#------------Kibana----------------------
+
+frontend kibana_frontend
+    bind *:15601
+    default_backend kibana_servers
+
+backend kibana_servers
+    balance roundrobin
+    server kibana1 $kibana_url:5601 check
+
+EOF
+}
+
+configure_haproxy() {
+    sudo setenforce 0
+    sudo setcap 'cap_net_bind_service=+ep' /usr/sbin/haproxy
+}
+
+
+get_kibana_system_password
+get_elastic_password
+get_kibana_url
+encode_base64
+read_private_ips
+create_kibana_yml
+create_haproxy_cfg
+http_p12_to_elasticsearch_pem
+configure_haproxy
+
+cd
+sudo openssl pkcs12 -in kibana-8.17.2/config/certs/http.p12 -clcerts -nokeys -out kibana-8.17.2/config/certs/http_ca.crt -passin "pass:"
+sudo chmod 777 kibana-8.17.2/config/certs/http_ca.crt

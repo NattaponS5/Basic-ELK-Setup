@@ -1,0 +1,29 @@
+#!/bin/bash
+set -e  # Exit on error
+
+# Create service for Elasicsearch
+create_kibana_service() {
+    cd
+    sudo tee /etc/systemd/system/kibana.service > /dev/null << EOF
+[Unit]
+Description=Kibana Service
+After=network.target
+
+[Service]
+Type=simple
+User=natt_
+Group=natt_
+ExecStart=/home/natt_/kibana-8.17.2/bin/kibana
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+
+EOF
+}
+
+create_kibana_service
+
+sudo systemctl daemon-reload
+sudo setenforce 0
+sudo systemctl enable kibana

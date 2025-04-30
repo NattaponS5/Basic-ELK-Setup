@@ -1,0 +1,30 @@
+#!/bin/bash
+set -e  # Exit on error
+
+# Create service for Elasicsearch
+create_elasticsearch_service() {
+    cd
+    sudo tee /etc/systemd/system/elasticsearch.service > /dev/null << EOF
+[Unit]
+Description=Elasticsearch Service
+After=network.target
+
+[Service]
+Type=simple
+User=natt_
+Group=natt_
+ExecStart=/home/$USER/elasticsearch-8.17.2/bin/elasticsearch
+Restart=always
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+
+EOF
+}
+
+create_elasticsearch_service
+
+sudo systemctl daemon-reload
+sudo setenforce 0
+sudo systemctl enable elasticsearch
