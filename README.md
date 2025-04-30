@@ -1,7 +1,5 @@
-
-This is the automated process for setting up the Elastic Stack (ELK) with Elasticsearch, Logstash, Kibana, and HAProxy. The automation script workflow ensures consistent deployment, certificate management, and service configuration across multiple virtual machines (VMs). 
-
-Please use this automated script with caution!!!
+## **⚠️ This is the automated process for setting up the Elastic Stack (ELK)...**  
+## **Please use this automated script with caution!!!**
 
 ---
 
